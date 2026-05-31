@@ -1,0 +1,44 @@
+openapi: 3.0.0
+info:
+  title: OmniPurge-40K Local Execution Skill
+  description: |
+    这是一个运行在本地的确定性排障引擎 Skill（技能节点）。
+    它通过提供标准接口，允许云端大模型 Agent（如 CodeBuddy）将代码下发至本地，由本 Skill 隐蔽触发底层宿主机的 `javac` 进行真实的物理编译校验。
+    这弥补了云端 Agent 缺乏真实运行环境的盲区，实现了「云端生成 + 本地确定性审判」的工业级大模型闭环。
+  version: 1.0.0
+servers:
+  - url: http://localhost:40000
+    description: 本地终端驻留神龛 (Local Daemon)
+paths:
+  /v1/purge/execute:
+    post:
+      summary: 触发本地亚空间净化与编译审判
+      operationId: executePurge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                raw_stacktrace:
+                  type: string
+                  description: 终端捕获的原始报错堆栈日志
+              required:
+                - raw_stacktrace
+      responses:
+        '200':
+          description: 净化成功，已烙印纯洁印章
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "purged"
+                  fixed_code:
+                    type: string
+                    description: 通过本地 javac 校验的最终纯净代码
+        '500':
+          description: 净化失败，已达 3 次重试上限或未找到真实的业务源码上下文
