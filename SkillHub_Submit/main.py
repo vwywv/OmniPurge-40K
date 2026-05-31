@@ -41,21 +41,32 @@ def find_file_in_dir(filename, root_dir='.', max_depth=3):
     return None
 
 def extract_stacktrace(log_text):
-    """精准锁定真正的业务 Bug 现场：根据 Caused by 分块，从最底层块内部自顶向下扫描"""
-    # 正则匹配 Java 堆栈: at com.example.Class.method(Filename.java:123)
-    pattern = re.compile(r'at\s+[\w\.\$]+\(([\w]+\.java):(\d+)\)')
+    """精准锁定真正的业务 Bug 现场：支持 Runtime 异常和 Javac 编译报错"""
+    # 1. 尝试匹配 Java Runtime 堆栈: at com.example.Class.method(Filename.java:123)
+    runtime_pattern = re.compile(r'at\s+[\w\.\$]+\(([\w]+\.java):(\d+)\)')
     
-    # 按 Caused by: 切分异常链，从最深层的根因开始找
+    # 2. 尝试匹配 javac 编译报错: File.java:123: error: ...
+    javac_pattern = re.compile(r'([\w]+\.java):(\d+):')
+
+    # 优先检测是不是编译报错
+    for line in log_text.strip().split('\n'):
+        match = javac_pattern.search(line)
+        if match:
+            filename = match.group(1)
+            lineno = int(match.group(2))
+            actual_file_path = find_file_in_dir(filename)
+            if actual_file_path:
+                return actual_file_path, lineno
+
+    # 按 Caused by: 切分异常链，从最深层的根因开始找 (针对 Runtime)
     blocks = re.split(r'Caused by:', log_text)
     for block in reversed(blocks):
-        # 在每个异常块内部，必须自顶向下（Top-down）找，因为块的顶部才是案发第一现场
+        # 在每个异常块内部，必须自顶向下（Top-down）找
         for line in block.strip().split('\n'):
-            match = pattern.search(line)
+            match = runtime_pattern.search(line)
             if match:
                 filename = match.group(1)
                 lineno = int(match.group(2))
-                
-                # 文件物理存在性校验 (过滤掉 JDK/Spring 等幽灵文件)
                 actual_file_path = find_file_in_dir(filename)
                 if actual_file_path:
                     return actual_file_path, lineno
@@ -259,7 +270,14 @@ def notify_workbuddy(title, stacktrace, fixed_code):
                       f"```java\n{fixed_code}\n```"
 
     try:
-        if corp_id and bot_id and secret:
+        if webhook_url:
+            # 模式 B: 标准 Webhook 模式 (优先使用，最稳定)
+            payload = {
+                "msgtype": "markdown",
+                "markdown": {"content": message_content}
+            }
+            response = requests.post(webhook_url, json=payload, timeout=10)
+        elif corp_id and bot_id and secret:
             # 模式 A: API 模式 (针对企业微信智能机器人/自建应用)
             # 1. 使用企业 CorpID + 应用 Secret 获取 Access Token
             token_url = f"https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={corp_id}&corpsecret={secret}"
@@ -280,13 +298,6 @@ def notify_workbuddy(title, stacktrace, fixed_code):
                 "safe": 0
             }
             response = requests.post(send_url, json=payload, timeout=10)
-        else:
-            # 模式 B: 标准 Webhook 模式
-            payload = {
-                "msgtype": "markdown",
-                "markdown": {"content": message_content}
-            }
-            response = requests.post(webhook_url, json=payload, timeout=10)
 
         response.raise_for_status()
         res_data = response.json()
